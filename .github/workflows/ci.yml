@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,3 +18,4 @@ jobs:
       - run: python -m ruff check .
       - run: python -m pytest -q
       - run: python scripts/run_crystal_mesh_ledger_sim.py --write-report
+      - run: python scripts/run_crystal_localization_gradient.py --samples 128 --chain-length 32 --bins 8
