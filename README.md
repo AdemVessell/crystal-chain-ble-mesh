@@ -77,6 +77,9 @@ results/crystal_mesh_ledger_sim.json
 results/crystal_mesh_ledger_sim.md
 ```
 
+The committed simulation transcript uses a deterministic fixture timestamp so
+reruns can be compared byte-for-byte.
+
 ## Current Evidence
 
 The simulation covers:
@@ -92,8 +95,9 @@ fork-hold:
   peers share a prefix
   both seal conflicting blocks at the same height
   sync returns conflict
-  a 29-byte Crystal region hint localizes the fork to the right half
+  a 29-byte explicit region hint localizes the fork to the right half
   disabling Crystal makes that region-localization gate fail
+  a truncated-BLAKE3 hash-null region hint localizes this fixture identically
   no automatic merge occurs
   witness request targets the mismatch height
 ```
@@ -108,14 +112,16 @@ BLE packet counts at 244-byte payload budget, including 4-byte fragment headers
 zero hash-manifest bytes on catch-up
 repair-vs-full-chain byte comparison
 divergence and block witness byte counts
+hash-null attribution check for the region-hint fixture
 root-pair localization-gradient result against a truncated-hash null
 aspirational packet targets now passing for the current fixture
 ```
 
 The current localization-gradient result is negative: the tested Crystal root
 functions do not beat the truncated-hash null as a root-pair position signal.
-The load-bearing Crystal claim in this packet is the explicit 29-byte region
-hint, not hidden error-location in the 8-byte root pair.
+The load-bearing protocol claim in this packet is the explicit 29-byte
+left/right region-hint frame. The current Crystal-style digest inside that frame
+is not proven superior to a truncated hash for this fixture.
 
 ## Wallet And Token Scope
 

@@ -841,6 +841,19 @@ class Chain:
         expected_missing = remote_block_count - self.block_count
         if len(exported_blocks) != expected_missing:
             raise LedgerError(f"expected {expected_missing} repair blocks")
+        if exported_blocks:
+            first_remote_block = Block.from_dict(exported_blocks[0])
+            if first_remote_block.height != self.block_count:
+                raise LedgerError("repair suffix starts at unexpected height")
+            if first_remote_block.parent_hash != self.head_hash:
+                return SyncResult(
+                    applied_blocks=0,
+                    local_after=self.summary(),
+                    local_before=local_before,
+                    reason="repair suffix parent diverges from local head",
+                    remote=remote_summary,
+                    status="conflict",
+                )
         candidate = Chain(state=self.state.clone(), blocks=list(self.blocks))
         applied = 0
         for payload in exported_blocks:

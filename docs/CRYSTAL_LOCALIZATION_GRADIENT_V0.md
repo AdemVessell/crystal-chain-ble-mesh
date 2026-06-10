@@ -70,9 +70,17 @@ like the truncated-hash null.
 The current system-level claim remains:
 
 ```text
-Crystal can be used as an explicit compact region-hint frame.
+An explicit compact region-hint frame can be used for coarse localization.
 BLAKE3 and Ed25519 bind the data.
 Fork-hold and manifest-free repair are tested by the ledger simulation.
+```
+
+The current digest-attribution result is also narrow:
+
+```text
+The Crystal-style digest in the region-hint fixture is not proven uniquely
+necessary; a truncated-BLAKE3 hash-null digest localizes that fixture
+identically.
 ```
 
 The stronger hypothesis remains unproved:
@@ -92,4 +100,3 @@ information.
 4. Do not claim root-pair error-location unless signal-over-null clears by
    multiple bits on this harness.
 ```
-

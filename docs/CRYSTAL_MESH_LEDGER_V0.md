@@ -32,6 +32,15 @@ Crystal localizes; hash anchors prove.
 Crystal roots are compact structural routing signals. BLAKE3 hashes and
 Ed25519 signatures bind the reference ledger data.
 
+Current attribution boundary:
+
+```text
+The explicit left/right region-hint frame is load-bearing in the measured
+protocol fixture.
+The current Crystal-style digest inside that frame is not proven superior to a
+truncated-BLAKE3 hash-null digest for the same fixture.
+```
+
 ## Frame Families
 
 ### commitment_beacon
@@ -89,7 +98,7 @@ Purpose:
 
 ```text
 decide which half differs before exchanging a full hash list
-make Crystal load-bearing in the fork-localization gate
+make the compact region-hint frame load-bearing in the fork-localization gate
 fail the kill test when Crystal is disabled
 ```
 
@@ -98,6 +107,8 @@ Boundary:
 ```text
 This is coarse left/right localization, not a full bisection protocol yet.
 This is not evidence that the 8-byte root pair alone is error-locating.
+This is not evidence that the current Crystal-style region digest is superior
+to a truncated hash; the current hash-null fixture localizes identically.
 ```
 
 ### block_repair
@@ -152,6 +163,12 @@ If peer extends local:
   require the final head and Crystal roots to match the advertised head
   return Active
 
+If advertised repair suffix does not extend local head:
+  ConflictHeld
+  apply zero blocks
+  preserve local state
+  return conflict
+
 If local extends peer:
   RemoteBehind
   do not push unless peer requests
@@ -170,8 +187,9 @@ Required fork behavior:
 ```text
 same-prefix fork -> conflict
 conflict -> zero auto-applied blocks
-conflict -> Crystal region hint localizes left/right region
+conflict -> explicit region hint localizes left/right region
 conflict -> disabling Crystal makes region localization fail
+conflict -> hash-null digest localizes the current fixture identically
 conflict -> mismatch height recorded
 conflict -> witness request targets mismatch height
 ```
@@ -242,8 +260,9 @@ catch-up applies missing blocks
 catch-up uses zero full-hash-manifest bytes
 catch-up repair is smaller than full-chain resend
 fork returns conflict
-Crystal localizes the fork to a coarse region
+explicit region hint localizes the fork to a coarse region
 Crystal kill test flips when the root function is disabled
+hash-null region hint localizes the current fixture identically
 fork does not auto-merge
 mismatch height is stable
 packet counts include fragment headers
@@ -290,6 +309,7 @@ financial settlement safety
 global finality
 Merkle replacement
 root-pair error-location
+current Crystal digest superiority over truncated hash
 ```
 
 ## Next Wire Hardening

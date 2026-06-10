@@ -28,6 +28,7 @@ catch-up:
   sync_from_remote_head applies a missing suffix from the advertised head
   no full block-hash manifest is required for catch-up
   final head, chain Crystal, and state Crystal must match the advertised head
+  a forked repair suffix now returns conflict without mutating local state
 
 fork hold:
   same-height differing heads still return conflict
@@ -38,6 +39,13 @@ Crystal load-bearing gate:
   it compares left/right Crystal region roots for equal-length conflicting heads
   the simulation localizes the current fork to the right region
   disabling Crystal makes that region-localization gate fail
+
+region-hint attribution:
+  the explicit left/right region-hint frame is load-bearing in the protocol
+  a truncated-BLAKE3 hash-null region hint localizes the current fixture
+  identically
+  the current Crystal-style digest is not claimed as uniquely necessary for
+  this fixture
 
 localization-gradient harness:
   root-pair divergence-position signal is tested against truncated BLAKE3
@@ -53,6 +61,10 @@ compact codecs:
   block witness now uses a compact binary block witness
   divergence witness now carries both conflicting compact blocks
   the prior packet targets now pass in the current fixture
+
+reproducibility:
+  committed simulation transcripts use a deterministic fixture timestamp
+  reruns can be compared byte-for-byte
 ```
 
 ## Current Result
@@ -60,9 +72,10 @@ compact codecs:
 The current claim is now narrower and stronger:
 
 ```text
-Crystal provides a coarse region-localization hint.
+An explicit compact region-hint frame provides coarse localization.
 BLAKE3 and Ed25519 still bind and prove the ledger data.
 Catch-up repair no longer relies on a full hash-list manifest.
+Deep fork catch-up returns a held conflict instead of a parent-mismatch crash.
 Repair and witness payloads no longer rely on canonical JSON in the measured sim.
 Root-pair distance alone is not claimed as an error-locating signal.
 ```
@@ -91,6 +104,8 @@ Confirm hash_manifest_wire_bytes is 0.
 Confirm crystal_region is right.
 Confirm crystal_disabled_region is none.
 Confirm crystal_kill_test_flips is true.
+Confirm region_hint_hash_null_localizes_identically is true.
+Confirm the docs do not claim current Crystal digest superiority over that null.
 Confirm root-pair localization gradient does not beat the hash null.
 Confirm all emitted fragments are <=244 bytes.
 Confirm repair_le_5_packets, block_witness_le_3_packets, and

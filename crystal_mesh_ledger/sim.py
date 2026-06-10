@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
+
+import blake3
 
 from .compact import (
     decode_compact_block_sequence,
@@ -35,6 +36,7 @@ from .wire import (
 
 RUN_ID = "crystal_mesh_ledger_sim"
 SCHEMA = "crystal.mesh_ledger.sim_report.v0"
+DETERMINISTIC_GENERATED_AT = "2026-06-10T00:00:00+00:00"
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,16 @@ class SimStep:
 
 def _peer_id(name: str) -> bytes:
     return (name.encode("utf-8") + b"\x00" * 8)[:8]
+
+
+def _blake3_region_root(leaves: list[bytes]) -> tuple[int, ...]:
+    if not leaves:
+        return (0, 0, 0, 0, 0, 0, 0, 0)
+    hasher = blake3.blake3(b"crystal-region-hint-null-v0")
+    for leaf in leaves:
+        hasher.update(len(leaf).to_bytes(4, "big"))
+        hasher.update(leaf)
+    return tuple(hasher.digest()[:8])
 
 
 def _beacon_frame(chain: Chain, peer_name: str) -> bytes:
@@ -304,6 +316,10 @@ def run_fork_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[str, 
         branch_a.crystal_region_hint(root_fn=disabled_crystal_root),
         branch_b.crystal_region_hint(root_fn=disabled_crystal_root),
     )
+    hash_null_region = compare_crystal_region_hints(
+        branch_a.crystal_region_hint(root_fn=_blake3_region_root),
+        branch_b.crystal_region_hint(root_fn=_blake3_region_root),
+    )
     hint_frame = encode_crystal_region_hint(
         block_count=remote_hint.block_count,
         left_crystal=bytes.fromhex(remote_hint.left_crystal),
@@ -393,6 +409,13 @@ def run_fork_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[str, 
         ),
         "divergence_witness_wire_bytes": len(divergence_wire),
         "hold_conflict": hold_conflict,
+        "region_hint_digest_attribution": (
+            "explicit region-hint frame is load-bearing; current Crystal fold is "
+            "not uniquely required versus truncated BLAKE3 for this fixture"
+        ),
+        "region_hint_frame_load_bearing": disabled_region != crystal_region,
+        "region_hint_hash_null_localizes_identically": hash_null_region == crystal_region,
+        "region_hint_hash_null_region": hash_null_region,
         "mismatch_height": mismatch_height,
         "naive_full_chain_bytes": _naive_full_chain_bytes(branch_b),
         "reference_json_block_witness_wire_bytes": len(reference_block_wire),
@@ -442,13 +465,14 @@ def build_report(*, payload_bytes: int = DEFAULT_BLE_PAYLOAD_BYTES) -> dict[str,
         },
         "boundary": (
             "Simulated BLE-sized transport only. Frames are fragmented by payload "
-            "budget but not sent over real radio. Crystal localizes; BLAKE3 and "
-            "Ed25519 anchors bind the reference ledger data."
+            "budget but not sent over real radio. The explicit region-hint frame "
+            "localizes the current fixture; BLAKE3 and Ed25519 anchors bind the "
+            "reference ledger data."
         ),
         "catch_up": catch_up,
         "fork_hold": fork_hold,
         "gates": gates,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": DETERMINISTIC_GENERATED_AT,
         "ok": all(gates.values()),
         "run_id": RUN_ID,
         "schema": SCHEMA,
@@ -503,6 +527,9 @@ def markdown_report(report: dict[str, Any]) -> str:
         f"- Crystal region: `{fork['crystal_region']}`",
         f"- Crystal disabled region: `{fork['crystal_disabled_region']}`",
         f"- Crystal kill test flips: `{fork['crystal_kill_test_flips']}`",
+        f"- Hash-null region: `{fork['region_hint_hash_null_region']}`",
+        "- Hash-null localizes identically: "
+        f"`{fork['region_hint_hash_null_localizes_identically']}`",
         f"- Crystal region hint wire: `{fork['crystal_region_hint_wire_bytes']}` bytes",
         f"- Crystal region hint BLE packets: `{fork['crystal_region_hint_ble_packets']}`",
         f"- Divergence witness wire: `{fork['divergence_witness_wire_bytes']}` bytes",

@@ -2,7 +2,7 @@
 
 Run: `crystal_mesh_ledger_sim`
 Status: `passed`
-Generated: `2026-06-10T20:00:45.648750+00:00`
+Generated: `2026-06-10T00:00:00+00:00`
 BLE payload budget: `244` bytes/packet
 Compact beacon size: `65` bytes
 
@@ -26,6 +26,8 @@ Compact beacon size: `65` bytes
 - Crystal region: `right`
 - Crystal disabled region: `none`
 - Crystal kill test flips: `True`
+- Hash-null region: `right`
+- Hash-null localizes identically: `True`
 - Crystal region hint wire: `29` bytes
 - Crystal region hint BLE packets: `1`
 - Divergence witness wire: `686` bytes
@@ -75,6 +77,6 @@ Compact beacon size: `65` bytes
 
 ## Boundary
 
-Simulated BLE-sized transport only. Frames are fragmented by payload budget but not sent over real radio. Crystal localizes; BLAKE3 and Ed25519 anchors bind the reference ledger data.
+Simulated BLE-sized transport only. Frames are fragmented by payload budget but not sent over real radio. The explicit region-hint frame localizes the current fixture; BLAKE3 and Ed25519 anchors bind the reference ledger data.
 
 This is a cloneable reference simulation, not real BLE networking, BitChat integration, production consensus, or adversarial mesh security.

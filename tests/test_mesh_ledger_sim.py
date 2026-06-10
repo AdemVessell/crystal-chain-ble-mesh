@@ -307,15 +307,20 @@ def test_count_only_catch_up_rejects_forked_suffix() -> None:
         ],
     )
     fork_summary = fork.summary()
+    before = local.summary()
 
-    with pytest.raises(LedgerError, match="block parent mismatch"):
-        local.sync_from_remote_head(
-            exported_blocks=fork.export_blocks_from(local.block_count),
-            remote_block_count=fork_summary.block_count,
-            remote_chain_crystal=fork_summary.chain_crystal,
-            remote_head_hash=fork_summary.head_hash,
-            remote_state_crystal=fork_summary.state_crystal,
-        )
+    result = local.sync_from_remote_head(
+        exported_blocks=fork.export_blocks_from(local.block_count),
+        remote_block_count=fork_summary.block_count,
+        remote_chain_crystal=fork_summary.chain_crystal,
+        remote_head_hash=fork_summary.head_hash,
+        remote_state_crystal=fork_summary.state_crystal,
+    )
+
+    assert result.status == "conflict"
+    assert result.applied_blocks == 0
+    assert result.reason == "repair suffix parent diverges from local head"
+    assert local.summary() == before
 
 
 def test_count_only_catch_up_does_not_commit_lied_head() -> None:
@@ -353,9 +358,15 @@ def test_count_only_catch_up_does_not_commit_lied_head() -> None:
 def test_crystal_region_hint_localizes_and_kill_test_flips() -> None:
     report = build_report()
 
+    assert report["generated_at"] == "2026-06-10T00:00:00+00:00"
     assert report["fork_hold"]["crystal_region"] == "right"
     assert report["fork_hold"]["crystal_disabled_region"] == "none"
     assert report["fork_hold"]["crystal_kill_test_flips"] is True
+    assert report["fork_hold"]["region_hint_frame_load_bearing"] is True
+    assert report["fork_hold"]["region_hint_hash_null_region"] == "right"
+    assert (
+        report["fork_hold"]["region_hint_hash_null_localizes_identically"] is True
+    )
 
 
 def test_localization_gradient_harness_is_deterministic() -> None:

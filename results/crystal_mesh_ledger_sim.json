@@ -10,7 +10,7 @@
     "naive_catch_up_full_chain_bytes": 5047,
     "naive_fork_full_chain_bytes": 6262
   },
-  "boundary": "Simulated BLE-sized transport only. Frames are fragmented by payload budget but not sent over real radio. Crystal localizes; BLAKE3 and Ed25519 anchors bind the reference ledger data.",
+  "boundary": "Simulated BLE-sized transport only. Frames are fragmented by payload budget but not sent over real radio. The explicit region-hint frame localizes the current fixture; BLAKE3 and Ed25519 anchors bind the reference ledger data.",
   "catch_up": {
     "applied_blocks": 2,
     "hash_manifest_wire_bytes": 0,
@@ -38,6 +38,10 @@
     "naive_full_chain_bytes": 6262,
     "reference_json_block_witness_wire_bytes": 1361,
     "reference_json_divergence_witness_wire_bytes": 2635,
+    "region_hint_digest_attribution": "explicit region-hint frame is load-bearing; current Crystal fold is not uniquely required versus truncated BLAKE3 for this fixture",
+    "region_hint_frame_load_bearing": true,
+    "region_hint_hash_null_localizes_identically": true,
+    "region_hint_hash_null_region": "right",
     "same_parent": true,
     "status": "conflict"
   },
@@ -55,7 +59,7 @@
     "region_hint_is_one_packet": true,
     "witness_request_is_one_packet": true
   },
-  "generated_at": "2026-06-10T20:00:45.648750+00:00",
+  "generated_at": "2026-06-10T00:00:00+00:00",
   "ok": true,
   "run_id": "crystal_mesh_ledger_sim",
   "schema": "crystal.mesh_ledger.sim_report.v0",
