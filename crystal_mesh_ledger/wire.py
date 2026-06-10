@@ -7,34 +7,43 @@ from typing import Any
 DEFAULT_BLE_PAYLOAD_BYTES = 244
 LEGACY_BLE_PAYLOAD_BYTES = 182
 BITCHAT_GCS_BUDGET_BYTES = 400
+FRAGMENT_HEADER_BYTES = 4
 
 BEACON_MAGIC = b"CB00"
 BEACON_SCHEMA = 0
 WITNESS_REQUEST_MAGIC = b"WR00"
+CRYSTAL_REGION_HINT_MAGIC = b"CH00"
+CRYSTAL_REGION_HINT_SCHEMA = 0
+
+
+def fragment_data_bytes(*, payload_bytes: int = DEFAULT_BLE_PAYLOAD_BYTES) -> int:
+    if payload_bytes <= FRAGMENT_HEADER_BYTES:
+        raise ValueError("payload_bytes must exceed fragment header bytes")
+    return payload_bytes - FRAGMENT_HEADER_BYTES
 
 
 def ble_packet_count(byte_count: int, *, payload_bytes: int = DEFAULT_BLE_PAYLOAD_BYTES) -> int:
     if byte_count < 0:
         raise ValueError("byte_count must be non-negative")
-    if payload_bytes < 1:
-        raise ValueError("payload_bytes must be positive")
+    data_bytes = fragment_data_bytes(payload_bytes=payload_bytes)
     if byte_count == 0:
         return 0
-    return (byte_count + payload_bytes - 1) // payload_bytes
+    return (byte_count + data_bytes - 1) // data_bytes
 
 
 def fragment_frame(frame: bytes, *, payload_bytes: int = DEFAULT_BLE_PAYLOAD_BYTES) -> list[bytes]:
     if not frame:
         return []
+    data_bytes = fragment_data_bytes(payload_bytes=payload_bytes)
     chunks: list[bytes] = []
     total = ble_packet_count(len(frame), payload_bytes=payload_bytes)
     offset = 0
     index = 0
     while offset < len(frame):
-        chunk = frame[offset : offset + payload_bytes]
+        chunk = frame[offset : offset + data_bytes]
         header = struct.pack(">BBH", index, total, len(chunk))
         chunks.append(header + chunk)
-        offset += payload_bytes
+        offset += data_bytes
         index += 1
     return chunks
 
@@ -135,4 +144,42 @@ def decode_witness_request(frame: bytes) -> dict[str, Any]:
     return {
         "mismatch_height": mismatch_height,
         "request_nonce": request_nonce,
+    }
+
+
+def encode_crystal_region_hint(
+    *,
+    block_count: int,
+    left_crystal: bytes,
+    right_crystal: bytes,
+    split_height: int,
+) -> bytes:
+    if len(left_crystal) != 8 or len(right_crystal) != 8:
+        raise ValueError("Crystal region roots must be 8 bytes")
+    if not 0 <= block_count <= 0xFFFFFFFF:
+        raise ValueError("block_count must fit uint32")
+    if not 0 <= split_height <= 0xFFFFFFFF:
+        raise ValueError("split_height must fit uint32")
+    return (
+        CRYSTAL_REGION_HINT_MAGIC
+        + struct.pack(">B", CRYSTAL_REGION_HINT_SCHEMA)
+        + struct.pack(">II", block_count, split_height)
+        + left_crystal
+        + right_crystal
+    )
+
+
+def decode_crystal_region_hint(frame: bytes) -> dict[str, Any]:
+    if len(frame) != 29:
+        raise ValueError("crystal region hint must be exactly 29 bytes")
+    if frame[:4] != CRYSTAL_REGION_HINT_MAGIC:
+        raise ValueError("unknown crystal region hint magic")
+    schema = frame[4]
+    block_count, split_height = struct.unpack(">II", frame[5:13])
+    return {
+        "block_count": block_count,
+        "left_crystal": frame[13:21].hex(),
+        "right_crystal": frame[21:29].hex(),
+        "schema": schema,
+        "split_height": split_height,
     }

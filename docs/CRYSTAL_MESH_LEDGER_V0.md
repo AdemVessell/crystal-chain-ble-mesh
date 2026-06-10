@@ -16,7 +16,9 @@ chat layer:
 
 ledger layer:
   replayable signed state events
+  wallet/token payloads
   compact head beacons
+  Crystal region hints
   suffix repair
   fork-hold witnesses
 ```
@@ -68,6 +70,36 @@ request_nonce:    4 bytes  uint32
 
 Total: `12` bytes.
 
+### crystal_region_hint
+
+Return a coarse Crystal routing hint for equal-length conflicting heads.
+
+```text
+magic:           4 bytes  "CH00"
+schema:          1 byte
+block_count:     4 bytes  uint32
+split_height:    4 bytes  uint32
+left_crystal:    8 bytes
+right_crystal:   8 bytes
+```
+
+Total: `29` bytes.
+
+Purpose:
+
+```text
+decide which half differs before exchanging a full hash list
+make Crystal load-bearing in the fork-localization gate
+fail the kill test when Crystal is disabled
+```
+
+Boundary:
+
+```text
+This is coarse left/right localization, not a full bisection protocol yet.
+This is not evidence that the 8-byte root pair alone is error-locating.
+```
+
 ### block_repair
 
 Ship the missing block suffix from the first missing height.
@@ -75,32 +107,34 @@ Ship the missing block suffix from the first missing height.
 Current reference payload:
 
 ```text
-canonical JSON block list
+compact binary block sequence
 ```
 
 Boundary:
 
 ```text
-This is intentionally not the final wire codec.
-The next hardening target is compact binary block repair.
+This is a reference codec, not a final transport binding.
+It currently round-trips signed blocks and feeds normal block validation.
+See docs/COMPACT_WIRE_CODEC_V0.md.
 ```
 
 ### witness_response
 
-Return reference divergence or block witness bytes.
+Return compact divergence or block witness bytes.
 
 Current reference payloads:
 
 ```text
-canonical JSON divergence witness
-canonical JSON block witness
+compact binary divergence witness
+compact binary block witness
 ```
 
 Boundary:
 
 ```text
-This is useful for packet accounting and state-machine validation.
-It is not yet a compact production witness codec.
+The compact divergence witness carries both conflicting signed blocks.
+It is still not a full production dispute game or consensus proof.
+See docs/COMPACT_WIRE_CODEC_V0.md.
 ```
 
 ## Sync State Machine
@@ -113,7 +147,9 @@ Active
 If peer extends local:
   MissingSuffix
   request block_repair from local block_count
+  do not require a full block-hash manifest
   validate and apply blocks
+  require the final head and Crystal roots to match the advertised head
   return Active
 
 If local extends peer:
@@ -122,6 +158,8 @@ If local extends peer:
 
 If histories differ before the shorter chain tip:
   ConflictHeld
+  request crystal_region_hint
+  localize coarse fork region
   request witness at first mismatch height
   do not auto-merge
   wait for policy or human resolution
@@ -132,6 +170,8 @@ Required fork behavior:
 ```text
 same-prefix fork -> conflict
 conflict -> zero auto-applied blocks
+conflict -> Crystal region hint localizes left/right region
+conflict -> disabling Crystal makes region localization fail
 conflict -> mismatch height recorded
 conflict -> witness request targets mismatch height
 ```
@@ -166,20 +206,75 @@ explicit signed manifest, QR verification, or an equivalent out-of-band flow.
 Do not assume BitChat transport keys and ledger validator keys are identical
 until the integration code is inspected.
 
+## Wallet And Token Payload
+
+The reference ledger includes a deliberately small wallet/token model. Wallets
+carry consensus-visible roles, and tokens carry consensus-visible classes.
+
+```text
+wallet roles:
+  user
+  founder
+  builder
+  gateway
+  watcher
+
+token classes:
+  mesh_credit
+  founder_marker
+  builder_marker
+  receipt
+```
+
+This preserves the original Crystal wallet/token direction while keeping the BLE
+mesh claim narrow. The wallet/token details are specified in
+`docs/CRYSTAL_WALLETS_TOKENS_V0.md`.
+
 ## Current Acceptance Gates
 
 The cloneable simulation must show:
 
 ```text
 compact beacon is one BLE packet
+Crystal region hint is one BLE packet
 witness request is one BLE packet
 catch-up applies missing blocks
+catch-up uses zero full-hash-manifest bytes
 catch-up repair is smaller than full-chain resend
 fork returns conflict
+Crystal localizes the fork to a coarse region
+Crystal kill test flips when the root function is disabled
 fork does not auto-merge
 mismatch height is stable
-packet counts are reported
+packet counts include fragment headers
 oversized witness/repair payloads are not hidden
+repair/witness packet targets pass for the current fixture
+```
+
+## Localization Gradient Result
+
+The repo also includes a root-pair localization-gradient harness:
+
+```text
+scripts/run_crystal_localization_gradient.py
+results/crystal_localization_gradient.json
+results/crystal_localization_gradient.md
+```
+
+Current result:
+
+```text
+balanced_crystal hamming MI:   0.036261 bits
+sequential_crystal hamming MI: 0.036343 bits
+truncated BLAKE3 null MI:      0.036847 bits
+signal over null:              0.0 bits
+```
+
+Interpretation:
+
+```text
+The current Crystal roots do not beat the truncated-hash null as a root-pair
+divergence-position signal.
 ```
 
 ## Non-Claims
@@ -194,25 +289,24 @@ adversarial mesh security
 financial settlement safety
 global finality
 Merkle replacement
+root-pair error-location
 ```
 
 ## Next Wire Hardening
 
 ```text
 compact block repair:
-  binary block header
-  transaction count
-  typed transaction bodies
-  signatures
-  optional compression
+  implemented as reference binary codec
 
 compact witness response:
-  height
-  local block hash
-  remote block hash
-  parent hash
-  compact proof bytes
-  anchor digest
+  compact block witness implemented
+  compact divergence witness implemented
+  still not a production dispute game
+
+interactive region bisection:
+  use Crystal region hints recursively
+  avoid full O(n) block-hash manifests
+  stop at exact mismatch height
 
 transport harness:
   two terminal peers

@@ -4,11 +4,21 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from .compact import (
+    decode_compact_block_sequence,
+    decode_compact_block_witness,
+    decode_compact_divergence_witness,
+    encode_compact_block_sequence,
+    encode_compact_block_witness,
+    encode_compact_divergence_witness,
+)
 from .ledger import (
     Chain,
     KeyPair,
     block_witness_payload,
     canonical_json,
+    compare_crystal_region_hints,
+    disabled_crystal_root,
     divergence_witness_payload,
     first_divergence_height,
 )
@@ -18,6 +28,7 @@ from .wire import (
     LEGACY_BLE_PAYLOAD_BYTES,
     ble_packet_count,
     encode_compact_beacon,
+    encode_crystal_region_hint,
     encode_witness_request,
     transmit_frame,
 )
@@ -168,9 +179,18 @@ def run_catch_up_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[s
     )
 
     repair_start_height = lagging.block_count
-    repair_blocks = source.export_blocks_from(repair_start_height)
-    repair_wire = canonical_json({"blocks": repair_blocks})
-    sync_result = lagging.sync_from_remote(source.manifest(), repair_blocks)
+    repair_source_blocks = source.blocks[repair_start_height:]
+    reference_json_wire = canonical_json({"blocks": source.export_blocks_from(repair_start_height)})
+    repair_wire = encode_compact_block_sequence(repair_source_blocks)
+    repair_blocks = [block.to_dict() for block in decode_compact_block_sequence(repair_wire)]
+    source_summary = source.summary()
+    sync_result = lagging.sync_from_remote_head(
+        exported_blocks=repair_blocks,
+        remote_block_count=source_summary.block_count,
+        remote_chain_crystal=source_summary.chain_crystal,
+        remote_head_hash=source_summary.head_hash,
+        remote_state_crystal=source_summary.state_crystal,
+    )
     _record_step(
         steps,
         accepted=sync_result.status == "applied_blocks",
@@ -185,7 +205,9 @@ def run_catch_up_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[s
     return {
         "applied_blocks": sync_result.applied_blocks,
         "heads_match_after_sync": lagging.head_hash == source.head_hash,
+        "hash_manifest_wire_bytes": 0,
         "naive_full_chain_bytes": naive_full_chain_bytes,
+        "reference_json_repair_wire_bytes": len(reference_json_wire),
         "repair_beats_full_chain": len(repair_wire) < naive_full_chain_bytes,
         "repair_ble_packets": ble_packet_count(len(repair_wire), payload_bytes=payload_bytes),
         "repair_wire_bytes": len(repair_wire),
@@ -209,6 +231,16 @@ def run_fork_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[str, 
             )
         ],
     )
+    branch_a.seal_transactions(
+        producer,
+        [
+            branch_a.make_mint_tx(
+                owner=alice,
+                token_id="BRANCH_A_RECEIPT",
+                wallet_id="alice",
+            )
+        ],
+    )
     branch_b.seal_transactions(
         producer,
         [
@@ -217,6 +249,16 @@ def run_fork_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[str, 
                 owner=alice,
                 to_wallet="carol",
                 token_id="MESH_TOKEN",
+            )
+        ],
+    )
+    branch_b.seal_transactions(
+        producer,
+        [
+            branch_b.make_mint_tx(
+                owner=alice,
+                token_id="BRANCH_B_RECEIPT",
+                wallet_id="alice",
             )
         ],
     )
@@ -242,11 +284,42 @@ def run_fork_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[str, 
         scenario=scenario,
     )
 
-    sync_result = branch_a.sync_from_remote(branch_b.manifest(), [])
+    branch_b_summary = branch_b.summary()
+    sync_result = branch_a.sync_from_remote_head(
+        exported_blocks=[],
+        remote_block_count=branch_b_summary.block_count,
+        remote_chain_crystal=branch_b_summary.chain_crystal,
+        remote_head_hash=branch_b_summary.head_hash,
+        remote_state_crystal=branch_b_summary.state_crystal,
+    )
     mismatch_height = first_divergence_height(branch_a.block_hashes(), branch_b.block_hashes())
     hold_conflict = sync_result.status == "conflict" and sync_result.applied_blocks == 0
     if mismatch_height is None:
         raise AssertionError("fork fixture did not diverge")
+
+    local_hint = branch_a.crystal_region_hint()
+    remote_hint = branch_b.crystal_region_hint()
+    crystal_region = compare_crystal_region_hints(local_hint, remote_hint)
+    disabled_region = compare_crystal_region_hints(
+        branch_a.crystal_region_hint(root_fn=disabled_crystal_root),
+        branch_b.crystal_region_hint(root_fn=disabled_crystal_root),
+    )
+    hint_frame = encode_crystal_region_hint(
+        block_count=remote_hint.block_count,
+        left_crystal=bytes.fromhex(remote_hint.left_crystal),
+        right_crystal=bytes.fromhex(remote_hint.right_crystal),
+        split_height=remote_hint.split_height,
+    )
+    _record_step(
+        steps,
+        accepted=crystal_region == "right",
+        detail=f"region={crystal_region}; split_height={remote_hint.split_height}",
+        family="crystal_region_hint",
+        frame=hint_frame,
+        label="beta returns Crystal region hint",
+        payload_bytes=payload_bytes,
+        scenario=scenario,
+    )
 
     request_frame = encode_witness_request(
         mismatch_height=mismatch_height,
@@ -263,26 +336,41 @@ def run_fork_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[str, 
         scenario=scenario,
     )
 
-    divergence_wire = divergence_witness_payload(branch_a, branch_b, mismatch_height)
+    reference_divergence_wire = divergence_witness_payload(branch_a, branch_b, mismatch_height)
+    divergence_wire = encode_compact_divergence_witness(
+        branch_a.blocks[mismatch_height],
+        branch_b.blocks[mismatch_height],
+    )
+    decoded_local, decoded_remote, decoded_same_parent = decode_compact_divergence_witness(
+        divergence_wire
+    )
+    if decoded_local.block_hash != branch_a.blocks[mismatch_height].block_hash:
+        raise AssertionError("compact divergence local block did not round-trip")
+    if decoded_remote.block_hash != branch_b.blocks[mismatch_height].block_hash:
+        raise AssertionError("compact divergence remote block did not round-trip")
     _record_step(
         steps,
-        accepted=True,
+        accepted=decoded_same_parent,
         detail=f"mismatch_height={mismatch_height}",
         family="witness_response",
         frame=divergence_wire,
-        label="beta returns reference divergence witness",
+        label="beta returns compact divergence witness",
         payload_bytes=payload_bytes,
         scenario=scenario,
     )
 
-    block_wire = block_witness_payload(branch_b, mismatch_height)
+    reference_block_wire = block_witness_payload(branch_b, mismatch_height)
+    block_wire = encode_compact_block_witness(branch_b.blocks[mismatch_height])
+    decoded_block = decode_compact_block_witness(block_wire)
+    if decoded_block.block_hash != branch_b.blocks[mismatch_height].block_hash:
+        raise AssertionError("compact block witness did not round-trip")
     _record_step(
         steps,
         accepted=True,
         detail=f"height={mismatch_height}",
         family="witness_response",
         frame=block_wire,
-        label="beta returns reference block witness",
+        label="beta returns compact block witness",
         payload_bytes=payload_bytes,
         scenario=scenario,
     )
@@ -291,6 +379,14 @@ def run_fork_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[str, 
         "auto_merge_allowed": False,
         "block_witness_ble_packets": ble_packet_count(len(block_wire), payload_bytes=payload_bytes),
         "block_witness_wire_bytes": len(block_wire),
+        "crystal_disabled_region": disabled_region,
+        "crystal_kill_test_flips": disabled_region != crystal_region,
+        "crystal_region": crystal_region,
+        "crystal_region_hint_ble_packets": ble_packet_count(
+            len(hint_frame),
+            payload_bytes=payload_bytes,
+        ),
+        "crystal_region_hint_wire_bytes": len(hint_frame),
         "divergence_witness_ble_packets": ble_packet_count(
             len(divergence_wire),
             payload_bytes=payload_bytes,
@@ -299,6 +395,8 @@ def run_fork_scenario(steps: list[SimStep], *, payload_bytes: int) -> dict[str, 
         "hold_conflict": hold_conflict,
         "mismatch_height": mismatch_height,
         "naive_full_chain_bytes": _naive_full_chain_bytes(branch_b),
+        "reference_json_block_witness_wire_bytes": len(reference_block_wire),
+        "reference_json_divergence_witness_wire_bytes": len(reference_divergence_wire),
         "same_parent": branch_a.blocks[mismatch_height].parent_hash
         == branch_b.blocks[mismatch_height].parent_hash,
         "status": sync_result.status,
@@ -318,9 +416,13 @@ def build_report(*, payload_bytes: int = DEFAULT_BLE_PAYLOAD_BYTES) -> dict[str,
         ),
         "catch_up_applied_blocks": catch_up["status"] == "applied_blocks",
         "catch_up_heads_match": bool(catch_up["heads_match_after_sync"]),
+        "catch_up_uses_no_hash_manifest": catch_up["hash_manifest_wire_bytes"] == 0,
         "catch_up_repair_beats_full_chain": bool(catch_up["repair_beats_full_chain"]),
+        "crystal_kill_test_flips": bool(fork_hold["crystal_kill_test_flips"]),
+        "crystal_region_localizes_fork": fork_hold["crystal_region"] == "right",
         "fork_held_without_auto_merge": bool(fork_hold["hold_conflict"]),
         "fork_mismatch_height_is_2": fork_hold["mismatch_height"] == 2,
+        "region_hint_is_one_packet": fork_hold["crystal_region_hint_ble_packets"] == 1,
         "witness_request_is_one_packet": all(
             step.ble_packets == 1 for step in steps if step.family == "witness_request"
         ),
@@ -387,6 +489,8 @@ def markdown_report(report: dict[str, Any]) -> str:
         f"- Applied blocks: `{catch_up['applied_blocks']}`",
         f"- Repair wire bytes: `{catch_up['repair_wire_bytes']}`",
         f"- Repair BLE packets: `{catch_up['repair_ble_packets']}`",
+        f"- Hash manifest wire bytes: `{catch_up['hash_manifest_wire_bytes']}`",
+        f"- Reference JSON repair wire bytes: `{catch_up['reference_json_repair_wire_bytes']}`",
         f"- Naive full-chain bytes: `{catch_up['naive_full_chain_bytes']}`",
         f"- Repair beats full-chain resend: `{catch_up['repair_beats_full_chain']}`",
         "",
@@ -396,10 +500,19 @@ def markdown_report(report: dict[str, Any]) -> str:
         f"- Hold conflict: `{fork['hold_conflict']}`",
         f"- Mismatch height: `{fork['mismatch_height']}`",
         f"- Same parent at mismatch: `{fork['same_parent']}`",
+        f"- Crystal region: `{fork['crystal_region']}`",
+        f"- Crystal disabled region: `{fork['crystal_disabled_region']}`",
+        f"- Crystal kill test flips: `{fork['crystal_kill_test_flips']}`",
+        f"- Crystal region hint wire: `{fork['crystal_region_hint_wire_bytes']}` bytes",
+        f"- Crystal region hint BLE packets: `{fork['crystal_region_hint_ble_packets']}`",
         f"- Divergence witness wire: `{fork['divergence_witness_wire_bytes']}` bytes",
         f"- Divergence witness BLE packets: `{fork['divergence_witness_ble_packets']}`",
+        "- Reference JSON divergence witness wire: "
+        f"`{fork['reference_json_divergence_witness_wire_bytes']}` bytes",
         f"- Block witness wire: `{fork['block_witness_wire_bytes']}` bytes",
         f"- Block witness BLE packets: `{fork['block_witness_ble_packets']}`",
+        "- Reference JSON block witness wire: "
+        f"`{fork['reference_json_block_witness_wire_bytes']}` bytes",
         "",
         "## Transcript",
         "",

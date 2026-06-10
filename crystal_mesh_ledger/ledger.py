@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -21,6 +22,16 @@ from cryptography.hazmat.primitives.serialization import (
 GENESIS_PARENT = "GENESIS"
 SyncStatus = Literal["already_in_sync", "applied_blocks", "remote_behind", "conflict"]
 TxType = Literal["create_wallet", "mint", "transfer"]
+WalletRole = Literal["user", "founder", "builder", "gateway", "watcher"]
+TokenClass = Literal["mesh_credit", "founder_marker", "builder_marker", "receipt"]
+CrystalRegion = Literal["none", "left", "right", "both", "shape_mismatch"]
+VALID_WALLET_ROLES: set[str] = {"user", "founder", "builder", "gateway", "watcher"}
+VALID_TOKEN_CLASSES: set[str] = {
+    "mesh_credit",
+    "founder_marker",
+    "builder_marker",
+    "receipt",
+}
 
 
 class LedgerError(ValueError):
@@ -51,6 +62,9 @@ def _leaf_root(payload: bytes) -> tuple[int, ...]:
     return tuple(digest[index] for index in range(8))
 
 
+CrystalRootFn = Callable[[list[bytes]], tuple[int, ...]]
+
+
 def _balanced_crystal_root(leaves: list[bytes]) -> tuple[int, ...]:
     if not leaves:
         return (0, 0, 0, 0, 0, 0, 0, 0)
@@ -59,12 +73,19 @@ def _balanced_crystal_root(leaves: list[bytes]) -> tuple[int, ...]:
         next_roots: list[tuple[int, ...]] = []
         for index in range(0, len(roots), 2):
             left = roots[index]
-            right = roots[index + 1] if index + 1 < len(roots) else roots[index]
+            if index + 1 >= len(roots):
+                next_roots.append(left)
+                continue
+            right = roots[index + 1]
             next_roots.append(
                 tuple(_fold_byte(left[head], right[head], head) for head in range(8))
             )
         roots = next_roots
     return roots[0]
+
+
+def disabled_crystal_root(leaves: list[bytes]) -> tuple[int, ...]:
+    return (0, 0, 0, 0, 0, 0, 0, 0)
 
 
 @dataclass(frozen=True)
@@ -215,7 +236,9 @@ class Transaction:
 @dataclass
 class WorldState:
     wallets: dict[str, str] = field(default_factory=dict)
+    wallet_roles: dict[str, str] = field(default_factory=dict)
     tokens: dict[str, str] = field(default_factory=dict)
+    token_classes: dict[str, str] = field(default_factory=dict)
     nonces: dict[str, int] = field(default_factory=dict)
 
     def clone(self) -> WorldState:
@@ -224,16 +247,38 @@ class WorldState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "nonces": dict(sorted(self.nonces.items())),
+            "token_classes": dict(sorted(self.token_classes.items())),
             "tokens": dict(sorted(self.tokens.items())),
+            "wallet_roles": dict(sorted(self.wallet_roles.items())),
             "wallets": dict(sorted(self.wallets.items())),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorldState:
+        wallets = {str(key): str(value) for key, value in data.get("wallets", {}).items()}
+        tokens = {str(key): str(value) for key, value in data.get("tokens", {}).items()}
+        wallet_roles = {
+            str(key): str(value) for key, value in data.get("wallet_roles", {}).items()
+        }
+        token_classes = {
+            str(key): str(value) for key, value in data.get("token_classes", {}).items()
+        }
+        for wallet_id in wallets:
+            wallet_roles.setdefault(wallet_id, "user")
+        for token_id in tokens:
+            token_classes.setdefault(token_id, "mesh_credit")
+        unknown_roles = set(wallet_roles.values()) - VALID_WALLET_ROLES
+        if unknown_roles:
+            raise LedgerError(f"unsupported wallet roles: {sorted(unknown_roles)}")
+        unknown_classes = set(token_classes.values()) - VALID_TOKEN_CLASSES
+        if unknown_classes:
+            raise LedgerError(f"unsupported token classes: {sorted(unknown_classes)}")
         return cls(
             nonces={str(key): int(value) for key, value in data.get("nonces", {}).items()},
-            tokens={str(key): str(value) for key, value in data.get("tokens", {}).items()},
-            wallets={str(key): str(value) for key, value in data.get("wallets", {}).items()},
+            token_classes=token_classes,
+            tokens=tokens,
+            wallet_roles=wallet_roles,
+            wallets=wallets,
         )
 
     @property
@@ -243,11 +288,25 @@ class WorldState:
     @property
     def crystal_root(self) -> tuple[int, ...]:
         leaves = [
-            canonical_json({"kind": "wallet", "owner": owner, "wallet_id": wallet_id})
+            canonical_json(
+                {
+                    "kind": "wallet",
+                    "owner": owner,
+                    "role": self.wallet_roles.get(wallet_id, "user"),
+                    "wallet_id": wallet_id,
+                }
+            )
             for wallet_id, owner in sorted(self.wallets.items())
         ]
         leaves.extend(
-            canonical_json({"kind": "token", "token_id": token_id, "wallet_id": wallet_id})
+            canonical_json(
+                {
+                    "class": self.token_classes.get(token_id, "mesh_credit"),
+                    "kind": "token",
+                    "token_id": token_id,
+                    "wallet_id": wallet_id,
+                }
+            )
             for token_id, wallet_id in sorted(self.tokens.items())
         )
         return _balanced_crystal_root(leaves)
@@ -266,21 +325,29 @@ class WorldState:
         if tx.tx_type == "create_wallet":
             wallet_id = str(tx.body["wallet_id"])
             owner = str(tx.body["owner_public_key"])
+            wallet_role = str(tx.body.get("wallet_role", "user"))
             if owner != tx.sender_public_key:
                 raise LedgerError("wallet owner must sign wallet creation")
+            if wallet_role not in VALID_WALLET_ROLES:
+                raise LedgerError("unsupported wallet role")
             if wallet_id in self.wallets:
                 raise LedgerError("wallet already exists")
             self.wallets[wallet_id] = owner
+            self.wallet_roles[wallet_id] = wallet_role
         elif tx.tx_type == "mint":
             wallet_id = str(tx.body["wallet_id"])
             token_id = str(tx.body["token_id"])
+            token_class = str(tx.body.get("token_class", "mesh_credit"))
             if wallet_id not in self.wallets:
                 raise LedgerError("mint target wallet missing")
             if self.wallets[wallet_id] != tx.sender_public_key:
                 raise LedgerError("mint signer must own target wallet")
+            if token_class not in VALID_TOKEN_CLASSES:
+                raise LedgerError("unsupported token class")
             if token_id in self.tokens:
                 raise LedgerError("token already exists")
             self.tokens[token_id] = wallet_id
+            self.token_classes[token_id] = token_class
         elif tx.tx_type == "transfer":
             token_id = str(tx.body["token_id"])
             from_wallet = str(tx.body["from_wallet"])
@@ -437,6 +504,22 @@ class ChainSummary:
 
 
 @dataclass(frozen=True)
+class CrystalRegionHint:
+    block_count: int
+    split_height: int
+    left_crystal: str
+    right_crystal: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "block_count": self.block_count,
+            "left_crystal": self.left_crystal,
+            "right_crystal": self.right_crystal,
+            "split_height": self.split_height,
+        }
+
+
+@dataclass(frozen=True)
 class SyncResult:
     status: SyncStatus
     reason: str
@@ -466,6 +549,42 @@ def first_divergence_height(local_hashes: list[str], remote_hashes: list[str]) -
     return None
 
 
+def crystal_region_hint_for_hashes(
+    block_hashes: list[str],
+    *,
+    root_fn: CrystalRootFn = _balanced_crystal_root,
+) -> CrystalRegionHint:
+    split_height = (len(block_hashes) + 1) // 2
+    left = [bytes.fromhex(block_hash) for block_hash in block_hashes[:split_height]]
+    right = [bytes.fromhex(block_hash) for block_hash in block_hashes[split_height:]]
+    return CrystalRegionHint(
+        block_count=len(block_hashes),
+        left_crystal=bytes(root_fn(left)).hex(),
+        right_crystal=bytes(root_fn(right)).hex(),
+        split_height=split_height,
+    )
+
+
+def compare_crystal_region_hints(
+    local: CrystalRegionHint,
+    remote: CrystalRegionHint,
+) -> CrystalRegion:
+    if (
+        local.block_count != remote.block_count
+        or local.split_height != remote.split_height
+    ):
+        return "shape_mismatch"
+    left_differs = local.left_crystal != remote.left_crystal
+    right_differs = local.right_crystal != remote.right_crystal
+    if left_differs and right_differs:
+        return "both"
+    if left_differs:
+        return "left"
+    if right_differs:
+        return "right"
+    return "none"
+
+
 @dataclass
 class Chain:
     state: WorldState = field(default_factory=WorldState)
@@ -486,6 +605,13 @@ class Chain:
     def chain_crystal(self) -> tuple[int, ...]:
         leaves = [bytes.fromhex(block.block_hash) for block in self.blocks]
         return _balanced_crystal_root(leaves)
+
+    def crystal_region_hint(
+        self,
+        *,
+        root_fn: CrystalRootFn = _balanced_crystal_root,
+    ) -> CrystalRegionHint:
+        return crystal_region_hint_for_hashes(self.block_hashes(), root_fn=root_fn)
 
     def summary(self) -> ChainSummary:
         return ChainSummary(
@@ -511,16 +637,37 @@ class Chain:
             tx_type=tx_type,
         )
 
-    def make_create_wallet_tx(self, *, owner: KeyPair, wallet_id: str) -> Transaction:
+    def make_create_wallet_tx(
+        self,
+        *,
+        owner: KeyPair,
+        wallet_id: str,
+        wallet_role: WalletRole = "user",
+    ) -> Transaction:
         return self.make_transaction(
-            body={"owner_public_key": owner.public_key_hex, "wallet_id": wallet_id},
+            body={
+                "owner_public_key": owner.public_key_hex,
+                "wallet_id": wallet_id,
+                "wallet_role": wallet_role,
+            },
             sender=owner,
             tx_type="create_wallet",
         )
 
-    def make_mint_tx(self, *, owner: KeyPair, token_id: str, wallet_id: str) -> Transaction:
+    def make_mint_tx(
+        self,
+        *,
+        owner: KeyPair,
+        token_class: TokenClass = "mesh_credit",
+        token_id: str,
+        wallet_id: str,
+    ) -> Transaction:
         return self.make_transaction(
-            body={"token_id": token_id, "wallet_id": wallet_id},
+            body={
+                "token_class": token_class,
+                "token_id": token_id,
+                "wallet_id": wallet_id,
+            },
             sender=owner,
             tx_type="mint",
         )
@@ -569,12 +716,14 @@ class Chain:
             raise LedgerError("block parent mismatch")
         if block.pre_state_hash != self.state.state_hash:
             raise LedgerError("block pre-state mismatch")
+        next_state = self.state.clone()
         for index, tx in enumerate(block.transactions):
-            self.state.apply_transaction(tx, check_pre_state=index == 0)
-        if block.post_state_hash != self.state.state_hash:
+            next_state.apply_transaction(tx, check_pre_state=index == 0)
+        if block.post_state_hash != next_state.state_hash:
             raise LedgerError("block post-state mismatch")
-        if block.post_state_crystal != bytes(self.state.crystal_root).hex():
+        if block.post_state_crystal != bytes(next_state.crystal_root).hex():
             raise LedgerError("block post-state crystal mismatch")
+        self.state = next_state
         self.blocks.append(block)
 
     def export_blocks_from(self, start_height: int) -> list[dict[str, Any]]:
@@ -640,6 +789,77 @@ class Chain:
             local_after=self.summary(),
             local_before=local_before,
             reason="remote history extended local prefix",
+            remote=remote_summary,
+            status="applied_blocks",
+        )
+
+    def sync_from_remote_head(
+        self,
+        *,
+        exported_blocks: list[dict[str, Any]],
+        remote_block_count: int,
+        remote_chain_crystal: str,
+        remote_head_hash: str,
+        remote_state_crystal: str,
+    ) -> SyncResult:
+        local_before = self.summary()
+        remote_summary = ChainSummary(
+            block_count=remote_block_count,
+            chain_crystal=remote_chain_crystal,
+            head_hash=remote_head_hash,
+            state_crystal=remote_state_crystal,
+            state_hash="",
+        )
+        if local_before.head_hash == remote_head_hash:
+            return SyncResult(
+                applied_blocks=0,
+                local_after=self.summary(),
+                local_before=local_before,
+                reason="heads already match",
+                remote=remote_summary,
+                status="already_in_sync",
+            )
+        if self.block_count > remote_block_count:
+            return SyncResult(
+                applied_blocks=0,
+                local_after=self.summary(),
+                local_before=local_before,
+                reason="remote history is shorter than local",
+                remote=remote_summary,
+                status="remote_behind",
+            )
+        if self.block_count == remote_block_count:
+            return SyncResult(
+                applied_blocks=0,
+                local_after=self.summary(),
+                local_before=local_before,
+                reason="same-height heads differ",
+                remote=remote_summary,
+                status="conflict",
+            )
+
+        expected_missing = remote_block_count - self.block_count
+        if len(exported_blocks) != expected_missing:
+            raise LedgerError(f"expected {expected_missing} repair blocks")
+        candidate = Chain(state=self.state.clone(), blocks=list(self.blocks))
+        applied = 0
+        for payload in exported_blocks:
+            candidate.apply_block(Block.from_dict(payload))
+            applied += 1
+        local_after = candidate.summary()
+        if local_after.head_hash != remote_head_hash:
+            raise LedgerError("repair did not reach advertised remote head")
+        if local_after.chain_crystal != remote_chain_crystal:
+            raise LedgerError("repair did not reach advertised chain crystal")
+        if local_after.state_crystal != remote_state_crystal:
+            raise LedgerError("repair did not reach advertised state crystal")
+        self.state = candidate.state
+        self.blocks = candidate.blocks
+        return SyncResult(
+            applied_blocks=applied,
+            local_after=self.summary(),
+            local_before=local_before,
+            reason="remote head extended local prefix without hash-list manifest",
             remote=remote_summary,
             status="applied_blocks",
         )
