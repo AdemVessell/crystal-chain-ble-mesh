@@ -1,0 +1,137 @@
+{
+  "aspirational_targets": {
+    "block_witness_le_3_packets": false,
+    "divergence_witness_le_3_packets": false,
+    "repair_le_5_packets": false
+  },
+  "baseline": {
+    "bitchat_gcs_budget_bytes": 400,
+    "legacy_payload_bytes": 182,
+    "naive_catch_up_full_chain_bytes": 4956,
+    "naive_fork_full_chain_bytes": 4958
+  },
+  "boundary": "Simulated BLE-sized transport only. Frames are fragmented by payload budget but not sent over real radio. Crystal localizes; BLAKE3 and Ed25519 anchors bind the reference ledger data.",
+  "catch_up": {
+    "applied_blocks": 2,
+    "heads_match_after_sync": true,
+    "naive_full_chain_bytes": 4956,
+    "repair_beats_full_chain": true,
+    "repair_ble_packets": 10,
+    "repair_wire_bytes": 2260,
+    "status": "applied_blocks"
+  },
+  "fork_hold": {
+    "auto_merge_allowed": false,
+    "block_witness_ble_packets": 6,
+    "block_witness_wire_bytes": 1361,
+    "divergence_witness_ble_packets": 11,
+    "divergence_witness_wire_bytes": 2635,
+    "hold_conflict": true,
+    "mismatch_height": 2,
+    "naive_full_chain_bytes": 4958,
+    "same_parent": true,
+    "status": "conflict"
+  },
+  "gates": {
+    "all_steps_accepted": true,
+    "beacons_are_one_packet": true,
+    "catch_up_applied_blocks": true,
+    "catch_up_heads_match": true,
+    "catch_up_repair_beats_full_chain": true,
+    "fork_held_without_auto_merge": true,
+    "fork_mismatch_height_is_2": true,
+    "witness_request_is_one_packet": true
+  },
+  "generated_at": "2026-06-10T19:02:39.529578+00:00",
+  "ok": true,
+  "run_id": "crystal_mesh_ledger_sim",
+  "schema": "crystal.mesh_ledger.sim_report.v0",
+  "sync": {
+    "beacon_wire_bytes": 65,
+    "ble_payload_bytes": 244,
+    "steps": [
+      {
+        "accepted": true,
+        "ble_packets": 1,
+        "detail": "height=1",
+        "family": "commitment_beacon",
+        "label": "alpha advertises lagging head",
+        "payload_bytes": 244,
+        "scenario": "catch_up",
+        "wire_bytes": 65
+      },
+      {
+        "accepted": true,
+        "ble_packets": 1,
+        "detail": "height=3",
+        "family": "commitment_beacon",
+        "label": "beta advertises extended head",
+        "payload_bytes": 244,
+        "scenario": "catch_up",
+        "wire_bytes": 65
+      },
+      {
+        "accepted": true,
+        "ble_packets": 10,
+        "detail": "remote history extended local prefix",
+        "family": "block_repair",
+        "label": "beta ships missing block suffix",
+        "payload_bytes": 244,
+        "scenario": "catch_up",
+        "wire_bytes": 2260
+      },
+      {
+        "accepted": true,
+        "ble_packets": 1,
+        "detail": "height=3",
+        "family": "commitment_beacon",
+        "label": "alpha beacon at fork head",
+        "payload_bytes": 244,
+        "scenario": "fork_hold",
+        "wire_bytes": 65
+      },
+      {
+        "accepted": true,
+        "ble_packets": 1,
+        "detail": "height=3",
+        "family": "commitment_beacon",
+        "label": "beta beacon at fork head",
+        "payload_bytes": 244,
+        "scenario": "fork_hold",
+        "wire_bytes": 65
+      },
+      {
+        "accepted": true,
+        "ble_packets": 1,
+        "detail": "histories diverge at height 2",
+        "family": "witness_request",
+        "label": "alpha requests divergence witness",
+        "payload_bytes": 244,
+        "scenario": "fork_hold",
+        "wire_bytes": 12
+      },
+      {
+        "accepted": true,
+        "ble_packets": 11,
+        "detail": "mismatch_height=2",
+        "family": "witness_response",
+        "label": "beta returns reference divergence witness",
+        "payload_bytes": 244,
+        "scenario": "fork_hold",
+        "wire_bytes": 2635
+      },
+      {
+        "accepted": true,
+        "ble_packets": 6,
+        "detail": "height=2",
+        "family": "witness_response",
+        "label": "beta returns reference block witness",
+        "payload_bytes": 244,
+        "scenario": "fork_hold",
+        "wire_bytes": 1361
+      }
+    ],
+    "total_beacon_ble_packets": 4,
+    "total_ble_packets": 32
+  }
+}

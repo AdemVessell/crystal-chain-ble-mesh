@@ -1,0 +1,19 @@
+[project]
+name = "crystal-chain-ble-mesh"
+version = "0.1.0"
+description = "Reference CrystalChain BLE mesh ledger simulation packet."
+requires-python = ">=3.11"
+dependencies = [
+    "blake3>=1.0.8",
+    "cryptography>=46.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
